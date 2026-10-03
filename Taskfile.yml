@@ -1,0 +1,108 @@
+version: '3'
+
+vars:
+  COMPOSE: docker compose -p s3gateway-tests -f compose.test.yml
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  build:
+    desc: Build bin/gateway
+    cmds:
+      - go build -trimpath -o bin/gateway ./cmd/gateway
+
+  run:
+    desc: Run the gateway using .env (pass flags after --)
+    dotenv: ['.env']
+    cmds:
+      - go run ./cmd/gateway {{.CLI_ARGS}}
+
+  test:
+    desc: Run Go tests with the race detector
+    cmds:
+      - go test -race ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  test-minio:
+    desc: Run the isolated minio-go Docker tests against disk and Azurite
+    cmds:
+      - '{{.COMPOSE}} run --build --rm minio-disk'
+      - '{{.COMPOSE}} run --build --rm minio-azure'
+
+  test-azure:
+    desc: Run the live Azure test using .env in a unique Azure container
+    dotenv: ['.env']
+    preconditions:
+      - sh: test -n "$AZURE_STORAGE_ACCOUNT" || test -n "$AZURE_STORAGE_SERVICE_URL"
+        msg: Set AZURE_STORAGE_ACCOUNT or AZURE_STORAGE_SERVICE_URL in .env or the environment
+    cmds:
+      - S3_TEST_AZURE=1 go test ./gateway -run '^TestAzureLive$' -count=1 -timeout=60s -v
+
+  ceph-core:
+    desc: Run selected Ceph tests against disk and Azurite
+    cmds:
+      - '{{.COMPOSE}} run --build --rm ceph-disk --core {{.CLI_ARGS}}'
+      - '{{.COMPOSE}} run --build --rm ceph-azure --core {{.CLI_ARGS}}'
+
+  ceph-full:
+    desc: Run the broader Ceph selection against both backends (failures expected)
+    cmds:
+      - |
+        test_status=0
+        {{.COMPOSE}} run --build --rm ceph-disk --full {{.CLI_ARGS}} || test_status=$?
+        {{.COMPOSE}} run --build --rm ceph-azure --full {{.CLI_ARGS}} || test_status=$?
+        exit "$test_status"
+
+  compatibility-report:
+    desc: Refresh the compatibility chart results from local Docker reports
+    cmds:
+      - python3 tests/report_compatibility.py
+
+  test-protocol:
+    desc: Run protocol regression tests on disk and Azurite in Docker
+    cmds:
+      - '{{.COMPOSE}} run --build --rm protocol-disk'
+      - '{{.COMPOSE}} run --build --rm protocol-azure'
+
+  ceph-versioning:
+    desc: Run selected upstream versioning tests against both backends
+    cmds:
+      - |
+        test_status=0
+        {{.COMPOSE}} run --build --rm ceph-disk --versioning {{.CLI_ARGS}} || test_status=$?
+        {{.COMPOSE}} run --build --rm ceph-azure --versioning {{.CLI_ARGS}} || test_status=$?
+        exit "$test_status"
+
+  ceph-acl:
+    desc: Run selected upstream private ACL tests against both backends
+    cmds:
+      - '{{.COMPOSE}} run --build --rm ceph-disk --acl {{.CLI_ARGS}}'
+      - '{{.COMPOSE}} run --build --rm ceph-azure --acl {{.CLI_ARGS}}'
+
+  iceberg:
+    desc: Run Iceberg integration tests against disk and Azurite
+    cmds:
+      - '{{.COMPOSE}} run --build --rm iceberg-disk'
+      - '{{.COMPOSE}} run --build --rm iceberg-azure'
+
+  test-containers:
+    desc: Run Ceph profiles, protocol SDK, minio-go and Iceberg tests on both backends
+    cmds:
+      - task: ceph-core
+      - task: test-protocol
+      - task: ceph-versioning
+      - task: ceph-acl
+      - task: test-minio
+      - task: iceberg
+
+  clean-containers:
+    desc: Remove this project's disposable compatibility fixtures
+    cmds:
+      - '{{.COMPOSE}} down'

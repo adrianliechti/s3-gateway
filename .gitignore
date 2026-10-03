@@ -1,0 +1,16 @@
+.creds
+.env
+.env.*
+!.env.example
+/bin/
+/data/
+/metadata/
+/versions/
+/.cache/
+/.task/
+*.test
+__pycache__/
+.venv/
+/results/*
+!/results/.gitkeep
+.cred

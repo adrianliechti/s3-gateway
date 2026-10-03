@@ -1,0 +1,116 @@
+# Isolated compatibility fixtures. All credentials below are local test values.
+x-gateway: &gateway
+  build: .
+  environment: &credentials
+    S3_ACCESS_KEY: gateway-test-access
+    S3_SECRET_KEY: gateway-test-secret
+  tmpfs:
+    - /data:uid=10001,gid=10001,mode=0700
+
+x-ceph: &ceph
+  build:
+    context: .
+    dockerfile: tests/ceph/Dockerfile
+  volumes:
+    - ./results:/reports
+
+x-iceberg: &iceberg
+  build:
+    context: .
+    dockerfile: tests/iceberg/Dockerfile
+  volumes:
+    - ./results:/reports
+
+x-minio-client: &minio-client
+  build:
+    context: .
+    dockerfile: tests/minio/Dockerfile
+  volumes:
+    - ./results:/reports
+
+services:
+  protocol-disk:
+    build:
+      context: .
+      dockerfile: tests/protocol/Dockerfile
+    volumes:
+      - ./results:/reports
+    environment:
+      REPORT_NAME: protocol-disk
+  protocol-azure:
+    build:
+      context: .
+      dockerfile: tests/protocol/Dockerfile
+    volumes:
+      - ./results:/reports
+    environment:
+      REPORT_NAME: protocol-azure
+      S3_TEST_AZURITE_URL: http://azurite:10000/gateway
+    depends_on:
+      - azurite
+  minio-disk:
+    <<: *minio-client
+    environment:
+      <<: *credentials
+      S3_ENDPOINT: http://disk:9000
+      REPORT_NAME: minio-disk
+    depends_on:
+      - disk
+  minio-azure:
+    <<: *minio-client
+    environment:
+      <<: *credentials
+      S3_ENDPOINT: http://azure:9000
+      REPORT_NAME: minio-azure
+    depends_on:
+      - azure
+  disk:
+    <<: *gateway
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+    environment:
+      # Custom local emulator account with a non-secret base64 fixture key.
+      AZURITE_ACCOUNTS: gateway:Y29tcGF0aWJpbGl0eS10ZXN0LWtleS1vbmx5
+    command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck --inMemoryPersistence
+  azure:
+    <<: *gateway
+    command: ["-listen", "0.0.0.0:9000", "-backend", "azure"]
+    environment:
+      <<: *credentials
+      AZURE_STORAGE_ACCOUNT: gateway
+      AZURE_STORAGE_KEY: Y29tcGF0aWJpbGl0eS10ZXN0LWtleS1vbmx5
+      AZURE_STORAGE_SERVICE_URL: http://azurite:10000/gateway
+    depends_on:
+      - azurite
+  ceph-disk:
+    <<: *ceph
+    environment:
+      <<: *credentials
+      S3_ENDPOINT: http://disk:9000
+      REPORT_NAME: ceph-disk
+    depends_on:
+      - disk
+  ceph-azure:
+    <<: *ceph
+    environment:
+      <<: *credentials
+      S3_ENDPOINT: http://azure:9000
+      REPORT_NAME: ceph-azure
+    depends_on:
+      - azure
+  iceberg-disk:
+    <<: *iceberg
+    environment:
+      <<: *credentials
+      S3_ENDPOINT: http://disk:9000
+      REPORT_NAME: iceberg-disk
+    depends_on:
+      - disk
+  iceberg-azure:
+    <<: *iceberg
+    environment:
+      <<: *credentials
+      S3_ENDPOINT: http://azure:9000
+      REPORT_NAME: iceberg-azure
+    depends_on:
+      - azure

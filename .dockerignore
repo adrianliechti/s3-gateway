@@ -1,0 +1,9 @@
+*
+!go.mod
+!go.sum
+!cmd/**
+!backend/**
+!gateway/**
+!internal/**
+!tests/**
+!Dockerfile
