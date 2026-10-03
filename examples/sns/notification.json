@@ -1,0 +1,17 @@
+{
+  "TopicConfigurations": [
+    {
+      "Id": "json-events",
+      "TopicArn": "arn:aws:sns:us-east-1:000000000000:replace-with-your-topic",
+      "Events": ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"],
+      "Filter": {
+        "Key": {
+          "FilterRules": [
+            { "Name": "prefix", "Value": "events/" },
+            { "Name": "suffix", "Value": ".json" }
+          ]
+        }
+      }
+    }
+  ]
+}

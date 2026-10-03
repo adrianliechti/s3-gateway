@@ -1,0 +1,217 @@
+version: '3'
+
+vars:
+  COMPOSE: docker compose -p s3gateway-tests -f compose.test.yml
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  build:
+    desc: Build bin/gateway
+    cmds:
+      - go build -trimpath -o bin/gateway ./cmd/gateway
+
+  run:
+    desc: Run the gateway using .env (pass flags after --)
+    dotenv: ['.env']
+    cmds:
+      - go run ./cmd/gateway {{.CLI_ARGS}}
+
+  test:
+    desc: Run Go tests with the race detector
+    cmds:
+      - go test -race ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  example-sns:
+    desc: Run the SNS subscriber and S3 notification round trip
+    dotenv: ['.env']
+    cmds:
+      - go run ./examples/sns {{.CLI_ARGS}}
+
+  example-abac:
+    desc: Demonstrate JWT sessions and bucket-tag authorization
+    dotenv: ['.env']
+    cmds:
+      - go run ./examples/abac {{.CLI_ARGS}}
+
+  example-objects:
+    desc: Demonstrate versions and presigned GET/PUT
+    dotenv: ['.env']
+    cmds:
+      - go run ./examples/objects {{.CLI_ARGS}}
+
+  example-multipart:
+    desc: Upload parts concurrently with checksums
+    dotenv: ['.env']
+    cmds:
+      - go run ./examples/multipart {{.CLI_ARGS}}
+
+  example-issuer:
+    desc: Run the loopback-only JWT issuer for the ABAC example
+    cmds:
+      - go run ./examples/abac/issuer
+
+  test-minio:
+    desc: Run the isolated minio-go Docker tests against disk and Azurite
+    cmds:
+      - '{{.COMPOSE}} run --build --rm minio-disk'
+      - '{{.COMPOSE}} run --build --rm minio-azure'
+
+  test-azure:
+    desc: Run the live Azure test using .env in a unique Azure container
+    dotenv: ['.env']
+    preconditions:
+      - sh: test -n "$AZURE_STORAGE_ACCOUNT" || test -n "$AZURE_STORAGE_SERVICE_URL"
+        msg: Set AZURE_STORAGE_ACCOUNT or AZURE_STORAGE_SERVICE_URL in .env or the environment
+    cmds:
+      - GATEWAY_TEST_AZURE=1 go test ./gateway -run '^TestAzureLive$' -count=1 -timeout=3m -v
+
+  test-s3:
+    desc: Run backend, protocol and minio-go tests through the S3 backend on RustFS
+    cmds:
+      - '{{.COMPOSE}} run --build --rm protocol-s3'
+      - '{{.COMPOSE}} run --build --rm minio-s3'
+
+  test-sns:
+    desc: Test S3 notifications against a running SNS gateway with a temporary topic/subscriber
+    dotenv: ['.env']
+    preconditions:
+      - sh: test -n "$GATEWAY_TEST_SNS_ENDPOINT" && test -n "$GATEWAY_SNS_ACCESS_KEY" && test -n "$GATEWAY_SNS_SECRET_KEY"
+        msg: Set GATEWAY_TEST_SNS_ENDPOINT and the SNS gateway credentials
+    cmds:
+      - go test ./gateway -run '^TestSNSLive$' -count=1 -timeout=2m -v
+
+  test-azure-protocol:
+    desc: Run protocol, versioning and native-history tests using live Azure credentials
+    dotenv: ['.env']
+    preconditions:
+      - sh: test -n "$AZURE_STORAGE_ACCOUNT" || test -n "$AZURE_STORAGE_SERVICE_URL"
+        msg: Set Azure credentials in .env or the environment
+    cmds:
+      - GATEWAY_TEST_AZURE=1 go test ./gateway -run 'TestAzureLive|TestSDKVersion|TestSDKPrivateACL|TestSDKCompatibility' -count=1 -timeout=15m -v
+
+  test-rustfs:
+    desc: Run RustFS's pinned Ceph compatibility selection against all gateway backends
+    cmds:
+      - |
+        test_status=0
+        {{.COMPOSE}} run --build --rm ceph-disk --rustfs --timeout=30 {{.CLI_ARGS}} || test_status=$?
+        {{.COMPOSE}} run --build --rm ceph-azure --rustfs --timeout=30 {{.CLI_ARGS}} || test_status=$?
+        {{.COMPOSE}} run --build --rm ceph-s3 --rustfs --timeout=30 {{.CLI_ARGS}} || test_status=$?
+        exit "$test_status"
+
+  ceph-core:
+    desc: Run selected Ceph tests against disk and Azurite
+    cmds:
+      - '{{.COMPOSE}} run --build --rm ceph-disk --core {{.CLI_ARGS}}'
+      - '{{.COMPOSE}} run --build --rm ceph-azure --core {{.CLI_ARGS}}'
+
+  ceph-full:
+    desc: Run Ceph without browser POST and SigV2 on both backends (failures expected)
+    cmds:
+      - |
+        test_status=0
+        {{.COMPOSE}} run --build --rm ceph-disk --full {{.CLI_ARGS}} || test_status=$?
+        {{.COMPOSE}} run --build --rm ceph-azure --full {{.CLI_ARGS}} || test_status=$?
+        exit "$test_status"
+
+  ceph-unfiltered:
+    desc: Run all Ceph S3 functional tests, including browser POST and SigV2
+    cmds:
+      - task: ceph-full
+        vars:
+          CLI_ARGS: '--include-legacy {{.CLI_ARGS}}'
+
+  compatibility-report:
+    desc: Refresh the compatibility chart results from local Docker reports
+    cmds:
+      - python3 tests/report_compatibility.py
+
+  test-protocol:
+    desc: Run protocol regression tests on disk and Azurite in Docker
+    cmds:
+      - '{{.COMPOSE}} run --build --rm protocol-disk'
+      - '{{.COMPOSE}} run --build --rm protocol-azure'
+
+  ceph-versioning:
+    desc: Run selected upstream versioning tests against both backends
+    cmds:
+      - |
+        test_status=0
+        {{.COMPOSE}} run --build --rm ceph-disk --versioning {{.CLI_ARGS}} || test_status=$?
+        {{.COMPOSE}} run --build --rm ceph-azure --versioning {{.CLI_ARGS}} || test_status=$?
+        exit "$test_status"
+
+  ceph-acl:
+    desc: Run selected upstream private ACL tests against both backends
+    cmds:
+      - '{{.COMPOSE}} run --build --rm ceph-disk --acl {{.CLI_ARGS}}'
+      - '{{.COMPOSE}} run --build --rm ceph-azure --acl {{.CLI_ARGS}}'
+
+  iceberg:
+    desc: Run Iceberg integration tests against disk and Azurite
+    cmds:
+      - '{{.COMPOSE}} run --build --rm iceberg-disk'
+      - '{{.COMPOSE}} run --build --rm iceberg-azure'
+
+  test-polaris:
+    desc: Run Polaris REST catalog, concurrent Iceberg commits and scans against both backends
+    cmds:
+      - '{{.COMPOSE}} run --build --rm polaris-disk'
+      - '{{.COMPOSE}} run --build --rm polaris-azure'
+
+  test-containers:
+    desc: Run Ceph profiles, SDK, Iceberg and Polaris tests on both backends
+    cmds:
+      - task: ceph-core
+      - task: test-protocol
+      - task: ceph-versioning
+      - task: ceph-acl
+      - task: test-minio
+      - task: iceberg
+      - task: test-polaris
+
+  test-conformance:
+    desc: Run the AWS-documented conformance scenarios in-process on disk
+    cmds:
+      - go test ./tests/conformance -count=1 -timeout=10m -v {{.CLI_ARGS}}
+
+  test-conformance-containers:
+    desc: Run the conformance scenarios over HTTP against the disk, Azurite and RustFS gateway containers
+    cmds:
+      - |
+        test_status=0
+        {{.COMPOSE}} run --build --rm conformance-disk || test_status=$?
+        {{.COMPOSE}} run --build --rm conformance-azure || test_status=$?
+        {{.COMPOSE}} run --build --rm conformance-s3 || test_status=$?
+        exit "$test_status"
+
+  test-conformance-aws:
+    desc: Validate the conformance oracle against Amazon S3 and record results/conformance-aws.json (creates and removes s3gw-conf-* buckets, or uses CONFORMANCE_BUCKET)
+    dotenv: ['.env']
+    preconditions:
+      - sh: test -n "$AWS_ACCESS_KEY_ID" || test -n "$AWS_PROFILE" || test -f "$HOME/.aws/credentials"
+        msg: Configure AWS credentials (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or AWS_PROFILE)
+    cmds:
+      - CONFORMANCE_TARGET=aws CONFORMANCE_REGION={{.CONFORMANCE_REGION | default "us-east-1"}} CONFORMANCE_BUCKET={{.CONFORMANCE_BUCKET}} CONFORMANCE_ALLOW_VERSIONING={{.CONFORMANCE_ALLOW_VERSIONING}} go test ./tests/conformance -count=1 -timeout=30m -v {{.CLI_ARGS}}
+
+  test-conformance-compare:
+    desc: Run the conformance scenarios on disk and compare every recorded step with results/conformance-aws.json
+    preconditions:
+      - sh: test -f results/conformance-aws.json
+        msg: Record a baseline first with task test-conformance-aws
+    cmds:
+      - CONFORMANCE_BASELINE=results/conformance-aws.json go test ./tests/conformance -count=1 -timeout=10m -v {{.CLI_ARGS}}
+
+  clean-containers:
+    desc: Remove this project's disposable compatibility fixtures
+    cmds:
+      - '{{.COMPOSE}} down'

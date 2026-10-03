@@ -1,0 +1,252 @@
+# Isolated compatibility fixtures. All credentials below are local test values.
+x-gateway: &gateway
+  build: .
+  environment: &credentials
+    GATEWAY_ACCESS_KEY: gateway-test-access
+    GATEWAY_SECRET_KEY: gateway-test-secret
+    GATEWAY_LIFECYCLE_INTERVAL: 250ms
+    GATEWAY_TEST_LIFECYCLE_DAY: 1s
+  tmpfs:
+    - /data:uid=10001,gid=10001,mode=0700
+
+x-ceph: &ceph
+  build:
+    context: .
+    dockerfile: tests/ceph/Dockerfile
+  volumes:
+    - ./results:/reports
+
+x-iceberg: &iceberg
+  build:
+    context: .
+    dockerfile: tests/iceberg/Dockerfile
+  volumes:
+    - ./results:/reports
+
+x-minio-client: &minio-client
+  build:
+    context: .
+    dockerfile: tests/minio/Dockerfile
+  volumes:
+    - ./results:/reports
+
+x-conformance: &conformance
+  build:
+    context: .
+    dockerfile: tests/conformance/Dockerfile
+  volumes:
+    - ./results:/reports
+
+services:
+  rustfs:
+    # RustFS 1.0.1; disposable provider, independent from gateway credentials.
+    image: rustfs/rustfs@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
+    environment:
+      RUSTFS_ACCESS_KEY: rustfs-test-access
+      RUSTFS_SECRET_KEY: rustfs-test-secret
+      RUSTFS_CONSOLE_ENABLE: 'false'
+    tmpfs:
+      - /data:uid=10001,gid=10001,mode=0700
+      - /logs:uid=10001,gid=10001,mode=0700
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9000/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+  s3:
+    <<: *gateway
+    command: ["-listen", "0.0.0.0:9000", "-backend", "s3"]
+    environment:
+      <<: *credentials
+      AWS_ENDPOINT_URL_S3: http://rustfs:9000
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: rustfs-test-access
+      AWS_SECRET_ACCESS_KEY: rustfs-test-secret
+    depends_on:
+      rustfs:
+        condition: service_healthy
+  protocol-s3:
+    build:
+      context: .
+      dockerfile: tests/protocol/Dockerfile
+    volumes:
+      - ./results:/reports
+    environment:
+      REPORT_NAME: protocol-s3
+      GATEWAY_TEST_STORAGE_ENDPOINT: http://rustfs:9000
+      AWS_ACCESS_KEY_ID: rustfs-test-access
+      AWS_SECRET_ACCESS_KEY: rustfs-test-secret
+    depends_on:
+      rustfs:
+        condition: service_healthy
+  minio-s3:
+    <<: *minio-client
+    environment:
+      <<: *credentials
+      GATEWAY_ENDPOINT: http://s3:9000
+      REPORT_NAME: minio-s3
+    depends_on:
+      - s3
+  ceph-s3:
+    <<: *ceph
+    environment:
+      <<: *credentials
+      GATEWAY_ENDPOINT: http://s3:9000
+      REPORT_NAME: ceph-s3
+    depends_on:
+      - s3
+  protocol-disk:
+    build:
+      context: .
+      dockerfile: tests/protocol/Dockerfile
+    volumes:
+      - ./results:/reports
+    environment:
+      REPORT_NAME: protocol-disk
+  protocol-azure:
+    build:
+      context: .
+      dockerfile: tests/protocol/Dockerfile
+    volumes:
+      - ./results:/reports
+    environment:
+      REPORT_NAME: protocol-azure
+      GATEWAY_TEST_AZURITE_URL: http://azurite:10000/gateway
+    depends_on:
+      - azurite
+  minio-disk:
+    <<: *minio-client
+    environment:
+      <<: *credentials
+      GATEWAY_ENDPOINT: http://disk:9000
+      REPORT_NAME: minio-disk
+    depends_on:
+      - disk
+  minio-azure:
+    <<: *minio-client
+    environment:
+      <<: *credentials
+      GATEWAY_ENDPOINT: http://azure:9000
+      REPORT_NAME: minio-azure
+    depends_on:
+      - azure
+  disk:
+    <<: *gateway
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+    environment:
+      # Custom local emulator account with a non-secret base64 fixture key.
+      AZURITE_ACCOUNTS: gateway:Y29tcGF0aWJpbGl0eS10ZXN0LWtleS1vbmx5
+    command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck --inMemoryPersistence
+  azure:
+    <<: *gateway
+    command: ["-listen", "0.0.0.0:9000", "-backend", "azure"]
+    environment:
+      <<: *credentials
+      AZURE_STORAGE_ACCOUNT: gateway
+      AZURE_STORAGE_KEY: Y29tcGF0aWJpbGl0eS10ZXN0LWtleS1vbmx5
+      AZURE_STORAGE_SERVICE_URL: http://azurite:10000/gateway
+    depends_on:
+      - azurite
+  ceph-disk:
+    <<: *ceph
+    environment:
+      <<: *credentials
+      GATEWAY_ENDPOINT: http://disk:9000
+      REPORT_NAME: ceph-disk
+    depends_on:
+      - disk
+  ceph-azure:
+    <<: *ceph
+    environment:
+      <<: *credentials
+      GATEWAY_ENDPOINT: http://azure:9000
+      REPORT_NAME: ceph-azure
+    depends_on:
+      - azure
+  iceberg-disk:
+    <<: *iceberg
+    environment:
+      <<: *credentials
+      GATEWAY_ENDPOINT: http://disk:9000
+      REPORT_NAME: iceberg-disk
+    depends_on:
+      - disk
+  iceberg-azure:
+    <<: *iceberg
+    environment:
+      <<: *credentials
+      GATEWAY_ENDPOINT: http://azure:9000
+      REPORT_NAME: iceberg-azure
+    depends_on:
+      - azure
+  conformance-disk:
+    <<: *conformance
+    environment:
+      <<: *credentials
+      CONFORMANCE_ENDPOINT: http://disk:9000
+      CONFORMANCE_NAME: disk
+      CONFORMANCE_BACKEND: disk
+      REPORT_NAME: conformance-disk
+    depends_on:
+      - disk
+  conformance-azure:
+    <<: *conformance
+    environment:
+      <<: *credentials
+      CONFORMANCE_ENDPOINT: http://azure:9000
+      CONFORMANCE_NAME: azure
+      REPORT_NAME: conformance-azure
+    depends_on:
+      - azure
+  conformance-s3:
+    <<: *conformance
+    environment:
+      <<: *credentials
+      CONFORMANCE_ENDPOINT: http://s3:9000
+      CONFORMANCE_NAME: s3
+      REPORT_NAME: conformance-s3
+    depends_on:
+      - s3
+  polaris:
+    # Pinned independently of the gateway. All credentials are disposable fixtures.
+    image: apache/polaris:1.7.0@sha256:3495f67f38cca33892a045f7dd3f46eb52387f0fd52d4145538a772fd8aedad7
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: gateway-test-access
+      AWS_SECRET_ACCESS_KEY: gateway-test-secret
+      POLARIS_BOOTSTRAP_CREDENTIALS: POLARIS,root,test-secret
+      polaris.realm-context.realms: POLARIS
+      quarkus.otel.sdk.disabled: 'true'
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8182/q/health"]
+      interval: 2s
+      timeout: 10s
+      retries: 60
+      start_period: 10s
+  polaris-disk:
+    <<: *iceberg
+    environment:
+      <<: *credentials
+      GATEWAY_ENDPOINT: http://disk:9000
+      POLARIS_ENDPOINT: http://polaris:8181
+      REPORT_NAME: polaris-disk
+      TEST_PATTERN: '^TestPolaris'
+    depends_on:
+      disk:
+        condition: service_started
+      polaris:
+        condition: service_healthy
+  polaris-azure:
+    <<: *iceberg
+    environment:
+      <<: *credentials
+      GATEWAY_ENDPOINT: http://azure:9000
+      POLARIS_ENDPOINT: http://polaris:8181
+      REPORT_NAME: polaris-azure
+      TEST_PATTERN: '^TestPolaris'
+    depends_on:
+      azure:
+        condition: service_started
+      polaris:
+        condition: service_healthy
